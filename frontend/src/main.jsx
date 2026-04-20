@@ -1,6 +1,8 @@
 import { createRoot } from 'react-dom/client';
 import './index.css';
 import { useEffect } from 'react';
+import { ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 // react-router-dom
 import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
 // --- Page Imports ---
@@ -97,6 +99,18 @@ const Layout = () => {
       </main>
 
       <Footer />
+      <ToastContainer 
+        position="top-right"
+        autoClose={5000}
+        hideProgressBar={false}
+        newestOnTop
+        closeOnClick
+        rtl={false}
+        pauseOnFocusLoss
+        draggable
+        pauseOnHover
+        theme="colored"
+      />
     </div>);
 };
 createRoot(document.getElementById('root')).render(<BrowserRouter>

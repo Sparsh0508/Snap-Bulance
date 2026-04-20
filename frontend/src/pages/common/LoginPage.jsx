@@ -1,10 +1,11 @@
 import * as React from 'react';
 import { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import AuthToast from '../../components/AuthToast';
+import { toast } from 'react-toastify';
 import { useAuthStore } from '../../store/useAuthStore'; // Adjust path as needed
 import { extractApiErrorMessage } from '../../utils/api-errors';
 import './LoginPage.css';
+
 const LoginPage = () => {
     const navigate = useNavigate();
     const location = useLocation();
@@ -12,22 +13,28 @@ const LoginPage = () => {
     // Form state
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
-    const [errorMsg, setErrorMsg] = useState('');
+
     // The ProtectedRoute passes the attempted URL in location.state.from
     const from = location.state?.from?.pathname || null;
+
     const handleLogin = async (e) => {
         e.preventDefault();
-        setErrorMsg('');
+        
         if (!email.trim() || !password.trim()) {
-            setErrorMsg('Email and password are required');
+            toast.error('Email and password are required');
             return;
         }
 
         try {
             // DTO expects email and passwordHash
             await login({ email: email.trim(), passwordHash: password });
+            
+            // Show Success Notification
+            toast.success('Login successful! Welcome back.');
+
             // Get the fresh user state to determine routing
             const user = useAuthStore.getState().user;
+            
             // If they were redirected here from a protected route, send them back
             if (from) {
                 navigate(from, { replace: true });
@@ -46,12 +53,11 @@ const LoginPage = () => {
                 navigate('/', { replace: true });
         }
         catch (error) {
-            setErrorMsg(extractApiErrorMessage(error, 'Invalid credentials'));
+            const errorMessage = extractApiErrorMessage(error, 'Invalid credentials');
+            toast.error(errorMessage);
         }
     };
     return (<div className="sb-login">
-        <AuthToast message={errorMsg} onClose={() => setErrorMsg('')}/>
- 
         {/* Background elements */}
         <div className="sb-login__grid" aria-hidden="true"/>
         <div className="sb-login__glow-left" aria-hidden="true"/>
@@ -139,3 +145,4 @@ const LoginPage = () => {
     </div>);
 };
 export default LoginPage;
+

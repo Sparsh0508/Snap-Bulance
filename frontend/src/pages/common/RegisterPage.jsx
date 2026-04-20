@@ -1,10 +1,11 @@
 import * as React from "react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import AuthToast from "../../components/AuthToast";
+import { toast } from "react-toastify";
 import { useAuthStore } from "../../store/useAuthStore"; // Adjust path as needed
 import { extractApiErrorMessage } from "../../utils/api-errors";
 import "./Register.css";
+
 const RegisterPage = () => {
     const navigate = useNavigate();
     const { signup, isLoading } = useAuthStore();
@@ -14,16 +15,16 @@ const RegisterPage = () => {
     const [email, setEmail] = useState("");
     const [phone, setPhone] = useState("");
     const [password, setPassword] = useState("");
-    const [errorMsg, setErrorMsg] = useState("");
+
     const handleSignup = async (e) => {
         e.preventDefault();
-        setErrorMsg("");
+        
         if (!fullName.trim() || !email.trim() || !phone.trim() || !password) {
-            setErrorMsg("Full name, email, phone, and password are required.");
+            toast.error("Full name, email, phone, and password are required.");
             return;
         }
         if (password.length < 6) {
-            setErrorMsg("Password must be at least 6 characters.");
+            toast.error("Password must be at least 6 characters.");
             return;
         }
 
@@ -36,6 +37,9 @@ const RegisterPage = () => {
                 passwordHash: password,
                 role,
             });
+
+            toast.success("Account created successfully! Welcome to SnapBulance.");
+
             // Route them based on the role they just registered as
             if (role === "USER")
                 navigate("/user/home", { replace: true });
@@ -47,7 +51,8 @@ const RegisterPage = () => {
                 navigate("/cfr/dashboard", { replace: true });
         }
         catch (error) {
-            setErrorMsg(extractApiErrorMessage(error, "Registration failed. Please try again."));
+            const errorMessage = extractApiErrorMessage(error, "Registration failed. Please try again.");
+            toast.error(errorMessage);
         }
     };
     const roleConfig = {
@@ -73,7 +78,6 @@ const RegisterPage = () => {
         },
     };
     return (<div className="sb-register">
-      <AuthToast message={errorMsg} onClose={() => setErrorMsg("")}/>
       {/* Background elements */}
       <div className="sb-register__grid" aria-hidden="true"/>
       <div className="sb-register__glow-left" aria-hidden="true"/>
@@ -105,7 +109,7 @@ const RegisterPage = () => {
                   </span>
                   <div className="sb-register__brand-role-info">
                     <span className="sb-register__brand-role-name">
-                      {cfg.label}
+                       {cfg.label}
                     </span>
                     <span className="sb-register__brand-role-desc">
                       {cfg.desc}
@@ -203,4 +207,6 @@ const RegisterPage = () => {
       </div>
     </div>);
 };
+
 export default RegisterPage;
+
