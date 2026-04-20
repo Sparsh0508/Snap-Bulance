@@ -24,9 +24,26 @@ function setAuthCookie(res, token) {
         maxAge: 24 * 60 * 60 * 1000,
     });
 }
-authRouter.get('/', requireAuth, asyncHandler(async (req, res) => {
-    const user = req.user;
-    res.json({ isAuth: true, user });
+authRouter.get('/', asyncHandler(async (req, res) => {
+    const token = req.cookies?.access_token;
+    if (!token) {
+        res.json({ isAuth: false, user: null });
+        return;
+    }
+
+    try {
+        const payload = jwt.verify(token, config.jwtSecret);
+        const user = await UserModel.findById(payload.sub);
+        if (!user) {
+            res.json({ isAuth: false, user: null });
+            return;
+        }
+
+        res.json({ isAuth: true, user: toSafeUser(user) });
+    }
+    catch {
+        res.json({ isAuth: false, user: null });
+    }
 }));
 authRouter.post('/signup', asyncHandler(async (req, res) => {
     const { email, phone, fullName, passwordHash, role = 'USER' } = req.body;

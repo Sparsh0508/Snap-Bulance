@@ -16,7 +16,24 @@ export default defineConfig([
     languageOptions: {
       ecmaVersion: 2020,
       sourceType: 'module',
+      parserOptions: {
+        ecmaFeatures: {
+          jsx: true,
+        },
+      },
       globals: globals.browser,
+    },
+  },
+  {
+    files: ['**/*.jsx'],
+    rules: {
+      'no-unused-vars': 'off',
+    },
+  },
+  {
+    files: ['src/main.jsx'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
     },
   },
 ])

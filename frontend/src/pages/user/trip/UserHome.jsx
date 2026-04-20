@@ -7,21 +7,20 @@ import './UserHome.css';
 const UserHome = () => {
     const navigate = useNavigate();
     const [location, setLocation] = useState([19.1973, 72.9644]);
-    const [isLoadingLocation, setIsLoadingLocation] = useState(true);
+    const [isLoadingLocation, setIsLoadingLocation] = useState(() => 'geolocation' in navigator);
     const [isBooking, setIsBooking] = useState(false); // New state for button loading
     useEffect(() => {
-        if ('geolocation' in navigator) {
-            navigator.geolocation.getCurrentPosition((position) => {
-                setLocation([position.coords.latitude, position.coords.longitude]);
-                setIsLoadingLocation(false);
-            }, (error) => {
-                console.error("Error obtaining location", error);
-                setIsLoadingLocation(false);
-            }, { enableHighAccuracy: true });
+        if (!('geolocation' in navigator)) {
+            return;
         }
-        else {
+
+        navigator.geolocation.getCurrentPosition((position) => {
+            setLocation([position.coords.latitude, position.coords.longitude]);
             setIsLoadingLocation(false);
-        }
+        }, (error) => {
+            console.error("Error obtaining location", error);
+            setIsLoadingLocation(false);
+        }, { enableHighAccuracy: true });
     }, []);
     // Add inside UserHome component
     useEffect(() => {

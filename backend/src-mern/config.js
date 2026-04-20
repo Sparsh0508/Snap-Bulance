@@ -9,6 +9,15 @@ export const config = {
     reactProdUrl: process.env.REACT_PROD_URL || '',
 };
 export const isProduction = config.environment === 'production';
+function parseOrigins(value) {
+    return String(value || '')
+        .split(',')
+        .map((origin) => origin.trim())
+        .filter(Boolean);
+}
 export function getAllowedOrigins() {
-    return isProduction ? [config.reactProdUrl].filter(Boolean) : [config.reactDevUrl];
+    return [...new Set([
+            ...parseOrigins(config.reactDevUrl),
+            ...parseOrigins(config.reactProdUrl),
+        ])];
 }
