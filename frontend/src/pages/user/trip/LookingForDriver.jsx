@@ -10,20 +10,50 @@ const LookingForDriver = () => {
     useEffect(() => {
         if (!tripId)
             return;
-        // Connect and join the trip room to wait for updates
-        socket.connect();
-        socket.emit("joinTrip", tripId);
-        // Listen for the driver accepting the trip
-        socket.on("tripAccepted", (data) => {
+        const joinTripRoom = () => {
+            socket.emit("joinTrip", tripId);
+        };
+        const handleTripAccepted = (data) => {
             console.log("Driver accepted!", data);
             // Navigate to the tracking page now that we have a driver
             navigate(`/user/track/${tripId}`);
-        });
-        socket.on("cfrAlert", (data) => {
+        };
+        const handleTripStatusChanged = (data) => {
+            if (["ASSIGNED", "EN_ROUTE", "ARRIVED", "ON_BOARD"].includes(data.status)) {
+                navigate(`/user/track/${tripId}`);
+            }
+        };
+        const handleCfrAlert = (data) => {
             alert(`🚨 CFR ALERT 🚨\n\n${data.message}`);
-        });
+        };
+        const syncTripStatus = async () => {
+            try {
+                const response = await api.get(`/users/trip/${tripId}`);
+                if (response.data?.driverId || (response.data?.status && response.data.status !== "SEARCHING")) {
+                    navigate(`/user/track/${tripId}`);
+                }
+            }
+            catch (error) {
+                console.error("Failed to sync trip status:", error);
+            }
+        };
+        // Connect and join the trip room to wait for updates
+        socket.connect();
+        if (socket.connected) {
+            joinTripRoom();
+        }
+        socket.on("connect", joinTripRoom);
+        socket.on("tripAccepted", handleTripAccepted);
+        socket.on("tripStatusChanged", handleTripStatusChanged);
+        socket.on("cfrAlert", handleCfrAlert);
+        syncTripStatus();
+        const interval = setInterval(syncTripStatus, 3000);
         return () => {
-            socket.off("tripAccepted");
+            clearInterval(interval);
+            socket.off("connect", joinTripRoom);
+            socket.off("tripAccepted", handleTripAccepted);
+            socket.off("tripStatusChanged", handleTripStatusChanged);
+            socket.off("cfrAlert", handleCfrAlert);
             // Don't disconnect here, we need it for the next page
         };
     }, [navigate, tripId]);

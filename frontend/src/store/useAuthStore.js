@@ -14,10 +14,18 @@ export const useAuthStore = create((set) => ({
                 set({ user: response.data.user, isAuthenticated: true, isLoading: false });
             }
             else {
+                if (useAuthStore.getState().isAuthenticated) {
+                    set({ isLoading: false });
+                    return;
+                }
                 set({ user: null, isAuthenticated: false, isLoading: false });
             }
         }
         catch {
+            if (useAuthStore.getState().isAuthenticated) {
+                set({ isLoading: false });
+                return;
+            }
             set({ user: null, isAuthenticated: false, isLoading: false });
         }
     },
@@ -56,7 +64,7 @@ export const useAuthStore = create((set) => ({
     },
     // Called purely by the Axios Interceptor
     handleSessionExpired: () => {
-        set({ user: null, isAuthenticated: false });
+        set({ user: null, isAuthenticated: false, isLoading: false });
         // Note: React Router will automatically detect isAuthenticated === false 
         // and kick them out of any ProtectedRoute.
     },

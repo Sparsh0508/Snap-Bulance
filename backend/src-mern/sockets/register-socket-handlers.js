@@ -51,6 +51,11 @@ export function registerSocketHandlers(io) {
                 message: 'Ambulance is en route!',
                 acceptedAt: new Date().toISOString(),
             });
+            io.to(payload.tripId).emit('tripStatusChanged', {
+                tripId: payload.tripId,
+                status: 'ASSIGNED',
+                message: 'Ambulance is en route!',
+            });
         });
         socket.on('updateTripStatus', (payload) => {
             io.to(payload.tripId).emit('tripStatusChanged', payload);

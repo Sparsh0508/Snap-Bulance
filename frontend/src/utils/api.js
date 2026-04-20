@@ -15,7 +15,9 @@ api.interceptors.response.use((response) => {
     return response;
 }, (error) => {
     // Any status codes that fall outside the range of 2xx cause this function to trigger
-    if (error.response?.status === 401) {
+    const requestUrl = String(error.config?.url || "");
+    const isAuthCheckRequest = requestUrl === "/auth" || requestUrl.endsWith("/auth");
+    if (error.response?.status === 401 && !isAuthCheckRequest && useAuthStore.getState().isAuthenticated) {
         console.warn('Session expired or unauthorized. Logging out...');
         // Directly trigger the Zustand action to clear state
         // This will instantly update the UI and push the user to /login via the ProtectedRoute
