@@ -20,7 +20,7 @@ function setAuthCookie(res, token) {
     res.cookie('access_token', token, {
         httpOnly: true,
         secure: isProduction,
-        sameSite: 'lax',
+        sameSite: isProduction ? 'none' : 'lax',
         maxAge: 24 * 60 * 60 * 1000,
     });
 }
@@ -141,7 +141,7 @@ authRouter.post('/logout', requireAuth, asyncHandler(async (_req, res) => {
     res.clearCookie('access_token', {
         httpOnly: true,
         secure: isProduction,
-        sameSite: 'lax',
+        sameSite: isProduction ? 'none' : 'lax',
     });
     res.json({ message: 'Logged out successfully' });
 }));
