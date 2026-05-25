@@ -1,29 +1,218 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
-import { TopBar } from "../../../components/layout/TopBar";
 import { BottomNav } from "../../../components/layout/BottomNav";
-import { MapStage } from "../../../components/shared/MapStage";
+import { TopBar } from "../../../components/layout/TopBar";
+import { AmbulanceLiveMap } from "../../../components/maps/AmbulanceLiveMap";
+import { GoogleMapsLoader } from "../../../components/maps/GoogleMapsLoader";
+import { GooglePlacesField } from "../../../components/maps/GooglePlacesField";
 import { Button } from "../../../components/ui/Button";
 import { MaterialIcon } from "../../../components/ui/MaterialIcon";
-import { getPatientBottomNav, patientData } from "../../../data/appData";
+import { PageLoader } from "../../../components/ui/PageState";
+import { getPatientBottomNav } from "../../../data/appData";
+import { formatCurrency } from "../../../lib/formatters";
 import { getCurrentCoordinates } from "../../../lib/geolocation";
 import { getApiErrorMessage } from "../../../services/apiClient";
 import { userApi } from "../../../services/appApi";
 
+const DEFAULT_CENTER = { lat: 19.1973, lng: 72.9644 };
+const DEFAULT_AMBULANCE_TYPES = ["ALL", "BLS", "ALS", "PTV"];
+const FARE_BASE_BY_TYPE = {
+  BLS: 420,
+  ALS: 680,
+  PTV: 280,
+  ALL: 420,
+};
+
+function getAmbulanceTypeLabel(type) {
+  const labels = {
+    ALL: "All Units",
+    BLS: "Basic Life",
+    ALS: "Advanced Life",
+    PTV: "Patient Van",
+  };
+
+  return labels[type] || type;
+}
+
+function buildHeatZones(location) {
+  if (!location) {
+    return [];
+  }
+
+  return [
+    {
+      id: "zone-primary",
+      center: location,
+      radius: 900,
+      fillColor: "#ff6b74",
+      strokeColor: "#ff6b74",
+    },
+    {
+      id: "zone-secondary",
+      center: {
+        lat: location.lat + 0.006,
+        lng: location.lng - 0.004,
+      },
+      radius: 650,
+      fillColor: "#f59e0b",
+      strokeColor: "#f59e0b",
+    },
+    {
+      id: "zone-tertiary",
+      center: {
+        lat: location.lat - 0.005,
+        lng: location.lng + 0.006,
+      },
+      radius: 520,
+      fillColor: "#38bdf8",
+      strokeColor: "#38bdf8",
+    },
+  ];
+}
+
 export default function PatientHomePage() {
   const navigate = useNavigate();
-  const [location, setLocation] = useState({
-    lat: 19.1973,
-    lng: 72.9644,
-  });
-  const [isSyncingLocation, setIsSyncingLocation] = useState(true);
+  const [liveLocation, setLiveLocation] = useState(null);
+  const [pickupLocation, setPickupLocation] = useState(null);
+  const [pickupAddress, setPickupAddress] = useState("");
+  const [destinationLocation, setDestinationLocation] = useState(null);
+  const [destinationAddress, setDestinationAddress] = useState("");
+  const [nearbyAmbulances, setNearbyAmbulances] = useState([]);
+  const [selectedAmbulanceType, setSelectedAmbulanceType] = useState("ALL");
+  const [routeMetrics, setRouteMetrics] = useState(null);
+  const [mapTheme, setMapTheme] = useState("dark");
+  const [isCheckingTrip, setIsCheckingTrip] = useState(true);
+  const [isSyncingLocation, setIsSyncingLocation] = useState(false);
+  const [isLoadingAmbulances, setIsLoadingAmbulances] = useState(false);
   const [isBooking, setIsBooking] = useState(false);
   const [locationError, setLocationError] = useState("");
 
-  const locationLabel = useMemo(() => {
-    return `${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}`;
-  }, [location.lat, location.lng]);
+  useEffect(() => {
+    let isMounted = true;
+
+    async function bootstrap() {
+      try {
+        const response = await userApi.getActiveTrip();
+        const activeTrip = response.data;
+
+        if (activeTrip?.id && isMounted) {
+          const nextPath = activeTrip.status === "SEARCHING"
+            ? `/patient/request/${activeTrip.id}`
+            : `/patient/tracking/${activeTrip.id}`;
+
+          navigate(nextPath, { replace: true });
+          return;
+        }
+      } catch {
+        // Keep the booking screen usable even if the active-trip check fails.
+      } finally {
+        if (isMounted) {
+          setIsCheckingTrip(false);
+        }
+      }
+
+      if (isMounted) {
+        await syncLocation();
+      }
+    }
+
+    bootstrap();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [navigate]);
+
+  useEffect(() => {
+    if (!pickupLocation?.lat || !pickupLocation?.lng) {
+      setNearbyAmbulances([]);
+      return;
+    }
+
+    let isMounted = true;
+
+    async function fetchNearbyAmbulances() {
+      setIsLoadingAmbulances(true);
+
+      try {
+        const response = await userApi.getNearbyAmbulances(pickupLocation.lat, pickupLocation.lng, 10);
+
+        if (isMounted) {
+          setNearbyAmbulances(response.data || []);
+        }
+      } catch (requestError) {
+        if (isMounted) {
+          setNearbyAmbulances([]);
+          toast.error(getApiErrorMessage(requestError, "Unable to load nearby ambulances."));
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingAmbulances(false);
+        }
+      }
+    }
+
+    fetchNearbyAmbulances();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [pickupLocation?.lat, pickupLocation?.lng]);
+
+  const ambulanceTypes = useMemo(() => {
+    const dynamicTypes = Array.from(
+      new Set(
+        nearbyAmbulances
+          .map((ambulance) => ambulance.ambulance?.type)
+          .filter(Boolean),
+      ),
+    );
+
+    return Array.from(new Set(["ALL", ...dynamicTypes, ...DEFAULT_AMBULANCE_TYPES.slice(1)]));
+  }, [nearbyAmbulances]);
+
+  const filteredAmbulances = useMemo(() => {
+    if (selectedAmbulanceType === "ALL") {
+      return nearbyAmbulances;
+    }
+
+    return nearbyAmbulances.filter((ambulance) => ambulance.ambulance?.type === selectedAmbulanceType);
+  }, [nearbyAmbulances, selectedAmbulanceType]);
+
+  const featuredAmbulance = filteredAmbulances[0] || nearbyAmbulances[0] || null;
+
+  const distanceKm = useMemo(() => {
+    if (routeMetrics?.distanceMeters) {
+      return routeMetrics.distanceMeters / 1000;
+    }
+
+    return featuredAmbulance?.distanceKm || 0;
+  }, [featuredAmbulance?.distanceKm, routeMetrics?.distanceMeters]);
+
+  const etaMinutes = useMemo(() => {
+    if (routeMetrics?.durationInTrafficSeconds) {
+      return Math.max(1, Math.ceil(routeMetrics.durationInTrafficSeconds / 60));
+    }
+
+    if (routeMetrics?.durationSeconds) {
+      return Math.max(1, Math.ceil(routeMetrics.durationSeconds / 60));
+    }
+
+    return featuredAmbulance?.estimatedArrivalMinutes || null;
+  }, [
+    featuredAmbulance?.estimatedArrivalMinutes,
+    routeMetrics?.durationInTrafficSeconds,
+    routeMetrics?.durationSeconds,
+  ]);
+
+  const estimatedFare = useMemo(() => {
+    const selectedType = featuredAmbulance?.ambulance?.type || selectedAmbulanceType || "BLS";
+    const baseFare = FARE_BASE_BY_TYPE[selectedType] ?? FARE_BASE_BY_TYPE.BLS;
+    return baseFare + distanceKm * 24;
+  }, [distanceKm, featuredAmbulance?.ambulance?.type, selectedAmbulanceType]);
+
+  const heatZones = useMemo(() => buildHeatZones(pickupLocation || liveLocation), [liveLocation, pickupLocation]);
 
   async function syncLocation() {
     setIsSyncingLocation(true);
@@ -31,141 +220,298 @@ export default function PatientHomePage() {
 
     try {
       const coordinates = await getCurrentCoordinates();
-      setLocation(coordinates);
-    } catch (error) {
-      setLocationError(getApiErrorMessage(error, "Could not access your live location."));
+      setLiveLocation(coordinates);
+      setPickupLocation(coordinates);
+      setPickupAddress((current) => current || "Current live location");
+    } catch (requestError) {
+      const message = getApiErrorMessage(
+        requestError,
+        "Location access is required to show nearby ambulances. You can still search manually.",
+      );
+      setLocationError(message);
+      toast.error(message);
     } finally {
       setIsSyncingLocation(false);
     }
   }
 
-  useEffect(() => {
-    syncLocation();
-  }, []);
-
-  useEffect(() => {
-    let mounted = true;
-
-    async function checkActiveTrip() {
-      try {
-        const response = await userApi.getActiveTrip();
-        const trip = response.data;
-
-        if (!mounted || !trip) {
-          return;
-        }
-
-        if (trip.status === "SEARCHING") {
-          navigate(`/patient/matching/${trip.id}`, { replace: true });
-          return;
-        }
-
-        navigate(`/patient/tracking/${trip.id}`, { replace: true });
-      } catch {
-        // Ignore active trip probe failures on initial page load.
-      }
+  async function handleBookAmbulance() {
+    if (!pickupLocation?.lat || !pickupLocation?.lng) {
+      toast.error("Please set a pickup location before booking.");
+      return;
     }
 
-    checkActiveTrip();
-
-    return () => {
-      mounted = false;
-    };
-  }, [navigate]);
-
-  async function handleRequestAmbulance() {
     setIsBooking(true);
 
     try {
-      const response = await userApi.bookTrip(location);
-      toast.success("Ambulance request created.");
-      navigate(`/patient/matching/${response.data.id}`);
-    } catch (error) {
-      toast.error(getApiErrorMessage(error, "Could not create your ambulance request."));
+      const response = await userApi.bookTrip({
+        lat: pickupLocation.lat,
+        lng: pickupLocation.lng,
+        destinationAddress: destinationAddress || null,
+        destinationLat: destinationLocation?.lat ?? null,
+        destinationLng: destinationLocation?.lng ?? null,
+      });
+
+      toast.success("Ambulance request created. We are finding the nearest unit now.");
+      navigate(`/patient/request/${response.data.id}`, { replace: true });
+    } catch (requestError) {
+      toast.error(getApiErrorMessage(requestError, "Unable to create an ambulance request right now."));
     } finally {
       setIsBooking(false);
     }
   }
 
+  async function handleShareLocation() {
+    const location = pickupLocation || liveLocation;
+
+    if (!location) {
+      toast.error("Set a pickup location first so it can be shared.");
+      return;
+    }
+
+    const shareText = `Emergency pickup location: ${pickupAddress || "Current live location"} (${location.lat.toFixed(5)}, ${location.lng.toFixed(5)})`;
+
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: "AmbuSOS live location",
+          text: shareText,
+        });
+        return;
+      }
+
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareText);
+        toast.success("Pickup details copied to clipboard.");
+        return;
+      }
+    } catch {
+      // Fall back to a toast below.
+    }
+
+    toast.info(shareText);
+  }
+
+  function handleCall() {
+    const phone = featuredAmbulance?.user?.phone;
+
+    if (phone) {
+      window.location.href = `tel:${phone}`;
+      return;
+    }
+
+    toast.info("No driver is assigned yet. Please use this once a live unit is available.");
+  }
+
+  if (isCheckingTrip) {
+    return <PageLoader label="Preparing live emergency map..." />;
+  }
+
   return (
-    <div className="min-h-screen bg-background">
-      <TopBar
-        links={[
-          { label: "Map", to: "/patient/home", active: true },
-          { label: "Missions", to: "/patient/history" },
-          { label: "Chat", to: "/patient/tracking" },
-          { label: "Profile", to: "/patient/profile" },
-        ]}
-      />
+    <div className="flex min-h-screen flex-col bg-background">
+      <TopBar sticky />
 
-      <main className="relative flex min-h-[calc(100vh-56px)] flex-col pb-20 md:min-h-[calc(100vh-64px)] md:pb-0">
-        <div className="bg-error p-stack-sm text-center text-on-error">
-          <p className="text-label-md uppercase">
-            For Immediate Life-Threatening Emergencies, Call Local Services If Unresponsive Here
-          </p>
-        </div>
+      <main className="relative flex flex-1 flex-col overflow-hidden pb-16 md:pb-0">
+        <GoogleMapsLoader loadingLabel="Loading live ambulance map...">
+          <div className="relative flex-1">
+            <AmbulanceLiveMap
+              ambulances={filteredAmbulances}
+              center={pickupLocation || liveLocation || DEFAULT_CENTER}
+              className="h-full rounded-none"
+              destinationLocation={destinationLocation}
+              heatZones={heatZones}
+              onCurrentLocation={syncLocation}
+              onRouteMetrics={setRouteMetrics}
+              routeDestination={pickupLocation || liveLocation}
+              routeOrigin={featuredAmbulance?.location || null}
+              showTraffic
+              theme={mapTheme}
+              userLocation={pickupLocation || liveLocation}
+              zoom={13}
+            />
 
-        <MapStage
-          image={patientData.images.patientHomeMap}
-          imageClassName="opacity-60"
-          className="relative min-h-[512px] flex-1"
-        >
-          <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center">
-            <div className="relative flex h-8 w-8 items-center justify-center">
-              <div className="absolute inset-0 rounded-full bg-primary animate-pulse-ring" />
-              <div className="z-10 h-4 w-4 rounded-full border-2 border-surface-container-lowest bg-primary" />
-            </div>
-            <div className="mt-2 flex items-center gap-2 rounded-full border border-outline-variant bg-surface-container-lowest px-3 py-1 shadow-sm">
-              <span className="h-2 w-2 rounded-full bg-tertiary" />
-              <span className="text-label-sm text-on-surface">GPS Active: High Accuracy</span>
-            </div>
-          </div>
+            <div className="absolute inset-x-0 top-0 z-20 px-4 pb-3 pt-4 md:px-6 md:pt-6">
+              <div className="mx-auto flex w-full max-w-5xl flex-col gap-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="max-w-[80%] rounded-3xl border border-white/10 bg-[#0f1720]/88 px-4 py-3 text-white shadow-panel backdrop-blur-md">
+                    <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.28em] text-white/60">
+                      <MaterialIcon name="emergency" className="text-[16px]" />
+                      Live Dispatch
+                    </div>
+                    <h1 className="mt-1 text-xl font-semibold md:text-2xl">Ambulance booking with live tracking</h1>
+                    <p className="mt-1 text-sm text-white/70">
+                      Choose pickup and destination, compare nearby units, and dispatch the nearest ambulance in real time.
+                    </p>
+                  </div>
 
-          <div className="absolute left-margin-mobile right-margin-mobile top-margin-mobile z-10 rounded-xl border border-outline-variant bg-surface-container-lowest p-stack-md shadow-panel md:left-auto md:right-margin-desktop md:w-96">
-            <h2 className="mb-1 text-label-md text-secondary">CURRENT LOCATION</h2>
-            <div className="flex items-start gap-3">
-              <MaterialIcon name="location_on" filled className="mt-1 text-primary" />
-              <div>
-                <p className="text-headline-sm">{isSyncingLocation ? "Syncing your GPS..." : "Live GPS Coordinates"}</p>
-                <p className="text-body-md text-secondary">{locationLabel}</p>
-                {locationError ? <p className="mt-2 text-label-sm text-error">{locationError}</p> : null}
+                  <button
+                    className="rounded-2xl border border-white/10 bg-[#0f1720]/88 px-3 py-2 text-sm font-medium text-white shadow-panel backdrop-blur-md transition hover:bg-[#16202e]"
+                    onClick={() => setMapTheme((current) => current === "dark" ? "light" : "dark")}
+                    type="button"
+                  >
+                    {mapTheme === "dark" ? "Light Map" : "Dark Map"}
+                  </button>
+                </div>
+
+                <div className="mx-auto w-full max-w-5xl rounded-[28px] border border-white/10 bg-[#0f1720]/86 p-3 shadow-panel backdrop-blur-xl md:p-4">
+                  <div className="grid gap-3 md:grid-cols-[1.2fr_1.2fr_auto]">
+                    <GooglePlacesField
+                      icon="my_location"
+                      label="Pickup"
+                      onChange={setPickupAddress}
+                      onPlaceSelect={({ address, lat, lng }) => {
+                        setPickupAddress(address);
+                        setPickupLocation({ lat, lng });
+                      }}
+                      placeholder="Search pickup point"
+                      value={pickupAddress}
+                    />
+                    <GooglePlacesField
+                      icon="local_hospital"
+                      label="Destination"
+                      onChange={setDestinationAddress}
+                      onPlaceSelect={({ address, lat, lng }) => {
+                        setDestinationAddress(address);
+                        setDestinationLocation({ lat, lng });
+                      }}
+                      placeholder="Hospital or destination"
+                      value={destinationAddress}
+                    />
+                    <Button
+                      className="w-full self-end whitespace-nowrap md:w-auto"
+                      icon="my_location"
+                      loading={isSyncingLocation}
+                      onClick={syncLocation}
+                    >
+                      Use Current
+                    </Button>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <div className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-white/80">
+                      {isLoadingAmbulances ? "Refreshing nearby ambulances..." : `${nearbyAmbulances.length} units online`}
+                    </div>
+                    <div className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-white/80">
+                      {etaMinutes ? `${etaMinutes} min arrival` : "ETA will appear once a route is ready"}
+                    </div>
+                    <div className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-white/80">
+                      {distanceKm ? `${distanceKm.toFixed(1)} km away` : "Waiting for dispatch route"}
+                    </div>
+                    {locationError ? (
+                      <div className="rounded-full bg-[#3a1014] px-3 py-1.5 text-xs font-medium text-[#ffb4ab]">
+                        {locationError}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
               </div>
             </div>
-            <button
-              className="mt-stack-sm flex items-center gap-1 text-label-md text-primary hover:underline"
-              onClick={syncLocation}
-              type="button"
-            >
-              <MaterialIcon name="edit" className="text-[16px]" />
-              {isSyncingLocation ? "Refreshing..." : "Refresh Location"}
-            </button>
-          </div>
-        </MapStage>
 
-        <div className="relative z-20 w-full border-t border-outline-variant bg-surface-container-lowest p-margin-mobile shadow-[0_-4px_16px_rgba(0,0,0,0.05)] md:absolute md:bottom-0 md:left-0 md:flex md:justify-center md:border-none md:bg-transparent md:p-margin-desktop md:shadow-none">
-          <div className="w-full md:max-w-xl md:rounded-xl md:border md:border-outline-variant md:bg-surface-container-lowest md:p-stack-lg md:shadow-panel">
-            <div className="mb-stack-md hidden text-center md:block">
-              <p className="text-headline-md">Need immediate assistance?</p>
-              <p className="text-body-md text-secondary">
-                Your exact location will be sent to the nearest available unit.
-              </p>
+            <div className="absolute inset-x-0 bottom-0 z-20 px-4 pb-5 md:px-6 md:pb-6">
+              <div className="mx-auto w-full max-w-5xl rounded-[32px] border border-white/10 bg-[#0f1720]/90 p-4 text-white shadow-panel backdrop-blur-xl md:p-5">
+                <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+                  <div className="flex-1">
+                    <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-[0.28em] text-white/60">
+                      <MaterialIcon name="local_taxi" className="text-[16px]" />
+                      Booking Panel
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {ambulanceTypes.map((type) => {
+                        const isActive = selectedAmbulanceType === type;
+                        return (
+                          <button
+                            key={type}
+                            className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                              isActive
+                                ? "bg-white text-[#0f1720]"
+                                : "border border-white/10 bg-white/6 text-white/80 hover:bg-white/12"
+                            }`}
+                            onClick={() => setSelectedAmbulanceType(type)}
+                            type="button"
+                          >
+                            {getAmbulanceTypeLabel(type)}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                      <div className="rounded-2xl border border-white/8 bg-white/6 p-3">
+                        <div className="text-xs uppercase tracking-[0.24em] text-white/55">Nearest Unit</div>
+                        <div className="mt-2 text-lg font-semibold">
+                          {featuredAmbulance?.ambulance?.plateNumber || "Searching"}
+                        </div>
+                        <div className="mt-1 text-sm text-white/70">
+                          {featuredAmbulance?.ambulance?.type || "Dispatching best match"}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-white/8 bg-white/6 p-3">
+                        <div className="text-xs uppercase tracking-[0.24em] text-white/55">Arrival Estimate</div>
+                        <div className="mt-2 text-lg font-semibold">
+                          {etaMinutes ? `${etaMinutes} min` : "Calculating"}
+                        </div>
+                        <div className="mt-1 text-sm text-white/70">
+                          {routeMetrics?.durationInTrafficText || "Traffic-aware routing"}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-white/8 bg-white/6 p-3">
+                        <div className="text-xs uppercase tracking-[0.24em] text-white/55">Estimated Fare</div>
+                        <div className="mt-2 text-lg font-semibold">{formatCurrency(estimatedFare)}</div>
+                        <div className="mt-1 text-sm text-white/70">
+                          {routeMetrics?.distanceText || (distanceKm ? `${distanceKm.toFixed(1)} km trip` : "Route preview pending")}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="w-full md:w-[320px]">
+                    <div className="rounded-[28px] border border-white/8 bg-white/6 p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-xs uppercase tracking-[0.24em] text-white/55">Dispatch Readiness</div>
+                          <div className="mt-1 text-lg font-semibold">
+                            {pickupAddress || "Set your pickup location"}
+                          </div>
+                        </div>
+                        <div className="rounded-2xl bg-[#ff6b74]/15 px-3 py-2 text-sm font-medium text-[#ffb4ab]">
+                          {nearbyAmbulances.length ? `${nearbyAmbulances.length} nearby` : "Standby"}
+                        </div>
+                      </div>
+
+                      <div className="mt-4 grid grid-cols-2 gap-3">
+                        <Button
+                          className="w-full"
+                          icon="call"
+                          onClick={handleCall}
+                          variant="soft"
+                        >
+                          Call Driver
+                        </Button>
+                        <Button
+                          className="w-full"
+                          icon="share"
+                          onClick={handleShareLocation}
+                          variant="soft"
+                        >
+                          Share Trip
+                        </Button>
+                      </div>
+
+                      <Button
+                        className="mt-3 w-full py-3 text-base"
+                        icon="local_shipping"
+                        loading={isBooking}
+                        onClick={handleBookAmbulance}
+                      >
+                        Book Ambulance
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
-            <Button
-              className="w-full py-4 text-headline-md"
-              disabled={isSyncingLocation}
-              icon="ambulance"
-              iconFilled
-              loading={isBooking}
-              onClick={handleRequestAmbulance}
-            >
-              REQUEST AMBULANCE NOW
-            </Button>
-            <p className="mt-stack-sm text-center text-label-sm text-secondary">
-              {isSyncingLocation ? "Confirming your location for dispatch..." : "Estimated response time in your area:"}{" "}
-              <span className="font-semibold text-on-surface">5-8 mins</span>
-            </p>
           </div>
-        </div>
+        </GoogleMapsLoader>
       </main>
 
       <BottomNav items={getPatientBottomNav("Map")} />

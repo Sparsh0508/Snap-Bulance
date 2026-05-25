@@ -14,6 +14,24 @@ export function getCurrentPosition(options = {}) {
   });
 }
 
+export function watchCurrentPosition(onSuccess, onError, options = {}) {
+  if (!("geolocation" in navigator)) {
+    onError?.(new Error("Geolocation is not available on this device."));
+    return null;
+  }
+
+  return navigator.geolocation.watchPosition(
+    onSuccess,
+    onError,
+    {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 5000,
+      ...options,
+    },
+  );
+}
+
 export async function getCurrentCoordinates(options = {}) {
   const position = await getCurrentPosition(options);
 
@@ -21,6 +39,12 @@ export async function getCurrentCoordinates(options = {}) {
     lat: position.coords.latitude,
     lng: position.coords.longitude,
   };
+}
+
+export function clearLocationWatch(watchId) {
+  if (watchId !== null && watchId !== undefined && "geolocation" in navigator) {
+    navigator.geolocation.clearWatch(watchId);
+  }
 }
 
 export function getDriverLatLng(driver) {

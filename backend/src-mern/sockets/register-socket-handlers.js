@@ -3,7 +3,11 @@ import { DriverProfileModel } from '../models/driver-profile.js';
 import { TripModel } from '../models/trip.js';
 import { normalizeDocument } from '../utils/normalize.js';
 import { isProduction } from '../config.js';
+import { registerLocationTracking } from './location-tracking.js';
+
 export function registerSocketHandlers(io) {
+    // Register location tracking handlers
+    registerLocationTracking(io);
     io.on('connection', (socket) => {
         if (!isProduction) console.log(`Client connected: ${socket.id}`);
         socket.on('disconnect', () => {

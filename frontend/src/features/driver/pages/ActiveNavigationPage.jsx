@@ -2,17 +2,51 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "react-toastify";
 import { DashboardShell } from "../../../components/layout/DashboardShell";
-import { MapStage } from "../../../components/shared/MapStage";
+import { AmbulanceLiveMap } from "../../../components/maps/AmbulanceLiveMap";
+import { GoogleMapsLoader } from "../../../components/maps/GoogleMapsLoader";
 import { Button } from "../../../components/ui/Button";
 import { MaterialIcon } from "../../../components/ui/MaterialIcon";
 import { Panel } from "../../../components/ui/Panel";
 import { PageError, PageLoader } from "../../../components/ui/PageState";
 import { TextField } from "../../../components/ui/TextField";
 import { formatStatusLabel } from "../../../lib/formatters";
-import { getCurrentCoordinates } from "../../../lib/geolocation";
+import {
+  clearLocationWatch,
+  getCurrentCoordinates,
+  watchCurrentPosition,
+} from "../../../lib/geolocation";
 import { getApiErrorMessage } from "../../../services/apiClient";
-import { socket } from "../../../services/socketClient";
 import { driverApi, tripApi } from "../../../services/appApi";
+import { socket } from "../../../services/socketClient";
+
+function toLatLng(location) {
+  if (!location?.lat || !location?.lng) {
+    return null;
+  }
+
+  return {
+    lat: location.lat,
+    lng: location.lng,
+  };
+}
+
+function buildDriverHeatZones(routePhase, pickupLocation, hospitalLocation) {
+  const focusLocation = routePhase === "TO_HOSPITAL" ? hospitalLocation : pickupLocation;
+
+  if (!focusLocation) {
+    return [];
+  }
+
+  return [
+    {
+      id: "driver-focus",
+      center: focusLocation,
+      radius: routePhase === "TO_HOSPITAL" ? 820 : 620,
+      fillColor: routePhase === "TO_HOSPITAL" ? "#60a5fa" : "#ff6b74",
+      strokeColor: routePhase === "TO_HOSPITAL" ? "#60a5fa" : "#ff6b74",
+    },
+  ];
+}
 
 export default function ActiveNavigationPage() {
   const navigate = useNavigate();
@@ -22,6 +56,10 @@ export default function ActiveNavigationPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showCompletionForm, setShowCompletionForm] = useState(false);
   const [error, setError] = useState("");
+  const [routeMetrics, setRouteMetrics] = useState(null);
+  const [liveLocation, setLiveLocation] = useState(null);
+  const [locationError, setLocationError] = useState("");
+  const [mapTheme, setMapTheme] = useState("dark");
   const [report, setReport] = useState({
     severity: "MODERATE",
     suspectedCondition: "",
@@ -36,6 +74,46 @@ export default function ActiveNavigationPage() {
 
     return ["ARRIVED", "ON_BOARD"].includes(trip.status) ? "TO_HOSPITAL" : "TO_PICKUP";
   }, [trip]);
+
+  const pickupLocation = useMemo(() => {
+    if (!trip?.pickupLat || !trip?.pickupLng) {
+      return null;
+    }
+
+    return {
+      lat: trip.pickupLat,
+      lng: trip.pickupLng,
+    };
+  }, [trip]);
+
+  const hospitalLocation = useMemo(() => {
+    if (trip?.hospital?.location) {
+      return toLatLng(trip.hospital.location);
+    }
+
+    if (trip?.destLat && trip?.destLng) {
+      return {
+        lat: trip.destLat,
+        lng: trip.destLng,
+      };
+    }
+
+    return null;
+  }, [trip]);
+
+  const routeDestination = routePhase === "TO_HOSPITAL" ? hospitalLocation : pickupLocation;
+  const mapCenter = liveLocation || pickupLocation || hospitalLocation;
+  const heatZones = useMemo(
+    () => buildDriverHeatZones(routePhase, pickupLocation, hospitalLocation),
+    [hospitalLocation, pickupLocation, routePhase],
+  );
+
+  const routeLabel = routePhase === "TO_PICKUP"
+    ? trip?.pickupAddress
+    : trip?.hospital?.name || trip?.destAddress || "Assigned Hospital";
+
+  const etaLabel = routeMetrics?.durationInTrafficText || routeMetrics?.durationText || "Live";
+  const distanceLabel = routeMetrics?.distanceText || (trip?.distanceKm ? `${trip.distanceKm} km` : "Live");
 
   useEffect(() => {
     if (!tripId) {
@@ -55,6 +133,7 @@ export default function ActiveNavigationPage() {
         }
 
         setTrip(response.data);
+        setShowCompletionForm(response.data.status === "ON_BOARD");
         setReport((current) => ({
           ...current,
           severity: response.data.medicalReport?.severity || current.severity,
@@ -64,6 +143,10 @@ export default function ActiveNavigationPage() {
             ? JSON.stringify(response.data.medicalReport.vitalsCheck, null, 2)
             : current.vitalsCheck,
         }));
+
+        if (!liveLocation) {
+          setLiveLocation(toLatLng(response.data.driver?.location));
+        }
       } catch (requestError) {
         if (mounted) {
           setError(getApiErrorMessage(requestError, "Unable to load this trip."));
@@ -75,36 +158,88 @@ export default function ActiveNavigationPage() {
       }
     }
 
-    fetchTrip();
+    function handleTripStatusChanged(payload) {
+      if (payload.status === "COMPLETED") {
+        toast.success("Trip completed successfully.");
+        navigate("/driver/dashboard", { replace: true });
+        return;
+      }
+
+      fetchTrip();
+    }
+
     socket.connect();
     socket.emit("joinTrip", tripId);
+    socket.on("tripStatusChanged", handleTripStatusChanged);
+
+    fetchTrip();
 
     return () => {
       mounted = false;
-      // Clean up socket listeners for this trip
-      socket.off("tripStatusChanged");
-      socket.off("driverLocationUpdated");
+      socket.off("tripStatusChanged", handleTripStatusChanged);
     };
-  }, [tripId]);
+  }, [liveLocation, navigate, tripId]);
+
+  useEffect(() => {
+    if (!trip?.driver?.id || !tripId) {
+      return undefined;
+    }
+
+    function emitLocation(lat, lng) {
+      socket.emit("updateDriverLocation", {
+        tripId,
+        lat,
+        lng,
+        driverId: trip.driver.id,
+      });
+    }
+
+    const watchId = watchCurrentPosition(
+      (position) => {
+        const nextLocation = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        };
+
+        setLiveLocation(nextLocation);
+        setLocationError("");
+        emitLocation(nextLocation.lat, nextLocation.lng);
+      },
+      (watchError) => {
+        setLocationError(getApiErrorMessage(watchError, "Live GPS tracking is unavailable on this device."));
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 2000,
+        timeout: 10000,
+      },
+    );
+
+    return () => {
+      clearLocationWatch(watchId);
+    };
+  }, [trip?.driver?.id, tripId]);
 
   const syncDriverLocation = useCallback(async () => {
+    if (!trip?.driver?.id) {
+      return;
+    }
+
     try {
       const coordinates = await getCurrentCoordinates();
-      socket.emit("driverLocationUpdate", {
+      setLiveLocation(coordinates);
+      setLocationError("");
+      socket.emit("updateDriverLocation", {
         tripId,
         lat: coordinates.lat,
         lng: coordinates.lng,
+        driverId: trip.driver.id,
       });
-    } catch {
-      // Keep the flow usable even if live location is unavailable.
+      toast.success("Location synced.");
+    } catch (requestError) {
+      toast.error(getApiErrorMessage(requestError, "Could not refresh live location."));
     }
-  }, [tripId]);
-
-  useEffect(() => {
-    if (trip) {
-      syncDriverLocation();
-    }
-  }, [syncDriverLocation, trip]);
+  }, [trip?.driver?.id, tripId]);
 
   function updateReport(field, value) {
     setReport((current) => ({ ...current, [field]: value }));
@@ -156,7 +291,7 @@ export default function ActiveNavigationPage() {
       if (report.vitalsCheck.trim()) {
         try {
           parsedVitals = JSON.parse(report.vitalsCheck);
-        } catch (parseError) {
+        } catch {
           setIsSubmitting(false);
           toast.error("Vitals must be valid JSON before completing handover.");
           return;
@@ -209,111 +344,133 @@ export default function ActiveNavigationPage() {
       mainClassName="flex-1 overflow-hidden"
     >
       <div className="flex h-[calc(100vh-56px)] flex-col md:h-[calc(100vh-64px)] md:flex-row">
-        <MapStage className="relative flex-1">
-          <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-surface/80 to-transparent md:hidden" />
-          <svg className="absolute inset-0 h-full w-full pointer-events-none" preserveAspectRatio="none">
-            <path d="M 20 80 Q 150 120 200 300 T 400 450" fill="none" opacity="0.6" stroke="#af101a" strokeDasharray="10,10" strokeWidth="6" />
-            <circle cx="20" cy="80" r="8" fill="#af101a" stroke="#fff" strokeWidth="2">
-              <animate attributeName="r" dur="2s" repeatCount="indefinite" values="8;16;8" />
-              <animate attributeName="opacity" dur="2s" repeatCount="indefinite" values="1;0;1" />
-            </circle>
-            <circle cx="400" cy="450" r="10" fill="#11651d" stroke="#fff" strokeWidth="2" />
-          </svg>
+        <GoogleMapsLoader loadingLabel="Loading driver navigation...">
+          <div className="relative flex-1">
+            <AmbulanceLiveMap
+              center={mapCenter}
+              className="h-full rounded-none"
+              destinationLocation={routePhase === "TO_HOSPITAL" ? hospitalLocation : null}
+              heatZones={heatZones}
+              hospitalLocation={hospitalLocation}
+              onCurrentLocation={syncDriverLocation}
+              onRouteMetrics={setRouteMetrics}
+              routeDestination={routeDestination}
+              routeOrigin={liveLocation}
+              showTraffic
+              theme={mapTheme}
+              trackedAmbulanceLocation={liveLocation}
+              userLocation={pickupLocation}
+              zoom={13}
+            />
 
-          <Panel className="absolute left-margin-mobile right-margin-mobile top-margin-mobile z-10 overflow-hidden bg-inverse-surface text-inverse-on-surface md:left-auto md:right-margin-desktop md:w-96">
-            <div className="flex items-center justify-between border-b border-outline-variant/20 bg-inverse-surface p-stack-md">
-              <div className="flex items-center gap-3">
-                <MaterialIcon name="turn_right" filled className="text-[32px] text-tertiary-fixed" />
-                <div>
-                  <div className="text-display-lg text-on-primary">
-                    {routePhase === "TO_PICKUP" ? "SCENE" : "ER"}
-                  </div>
-                  <div className="text-headline-sm text-secondary-fixed-dim">
-                    {routePhase === "TO_PICKUP" ? trip.pickupAddress : trip.hospital?.name || trip.destAddress || "Assigned Hospital"}
+            <Panel className="absolute left-4 right-4 top-4 z-10 overflow-hidden bg-[#0f1720]/92 text-white shadow-panel backdrop-blur-xl md:left-auto md:right-6 md:w-96">
+              <div className="flex items-center justify-between border-b border-white/10 p-4">
+                <div className="flex items-center gap-3">
+                  <MaterialIcon
+                    name={routePhase === "TO_PICKUP" ? "emergency" : "local_hospital"}
+                    filled
+                    className="text-[28px] text-[#ffb4ab]"
+                  />
+                  <div>
+                    <div className="text-lg font-semibold">
+                      {routePhase === "TO_PICKUP" ? "Respond to Scene" : "Transfer to Hospital"}
+                    </div>
+                    <div className="text-sm text-white/65">{routeLabel}</div>
                   </div>
                 </div>
+                <button
+                  className="rounded-2xl border border-white/10 bg-white/6 px-3 py-2 text-sm font-medium text-white transition hover:bg-white/12"
+                  onClick={() => setMapTheme((current) => current === "dark" ? "light" : "dark")}
+                  type="button"
+                >
+                  {mapTheme === "dark" ? "Light Map" : "Dark Map"}
+                </button>
               </div>
-            </div>
-            <div className="flex items-center justify-between bg-surface-container-highest p-stack-md text-on-surface">
-              <div>
-                <div className="text-label-sm uppercase tracking-widest text-secondary">ETA</div>
-                <div className="text-headline-lg-mobile text-primary">{routePhase === "TO_PICKUP" ? "Pickup" : "Hospital"}</div>
-              </div>
-              <div className="h-8 w-px bg-outline-variant" />
-              <div>
-                <div className="text-label-sm uppercase tracking-widest text-secondary">Distance</div>
-                <div className="text-headline-lg-mobile">{trip.distanceKm ? `${trip.distanceKm} km` : "Live"}</div>
-              </div>
-              <div className="h-8 w-px bg-outline-variant" />
-              <div>
-                <div className="text-label-sm uppercase tracking-widest text-secondary">Phase</div>
-                <div className="rounded bg-tertiary-fixed-dim/20 px-2 py-1 text-label-md font-bold text-tertiary">
-                  {routePhase === "TO_PICKUP" ? "Route to Patient" : showCompletionForm ? "Handover" : "Route to Hospital"}
-                </div>
-              </div>
-            </div>
-          </Panel>
 
-          <Panel className="absolute bottom-margin-mobile left-margin-mobile right-margin-mobile z-10 p-stack-md md:bottom-auto md:left-margin-mobile md:right-auto md:top-margin-desktop md:w-80">
-            <div className="mb-2 flex items-start justify-between">
-              <div className="text-label-md uppercase text-secondary">Mission #{trip.id.slice(0, 8).toUpperCase()}</div>
-              <MaterialIcon name="fiber_manual_record" filled className="animate-soft-pulse text-[16px] text-primary" />
-            </div>
-            <h3 className="text-headline-md">{trip.medicalReport?.suspectedCondition || "Emergency Response"}</h3>
-            <p className="mt-1 flex items-center gap-2 text-body-md text-secondary">
-              <MaterialIcon name="location_on" className="text-[18px]" />
-              {routePhase === "TO_PICKUP" ? trip.pickupAddress : trip.hospital?.address || trip.destAddress || "Hospital destination"}
-            </p>
-            <p className="mt-2 text-label-sm uppercase tracking-wider text-secondary">{formatStatusLabel(trip.status)}</p>
-            {showCompletionForm ? (
-              <div className="mt-4 border-t border-surface-variant pt-4">
-                <div className="grid gap-stack-sm">
-                  <TextField
-                    id="severity"
-                    label="Severity"
-                    onChange={(event) => updateReport("severity", event.target.value)}
-                    value={report.severity}
-                  />
-                  <TextField
-                    id="suspected-condition"
-                    label="Suspected Condition"
-                    onChange={(event) => updateReport("suspectedCondition", event.target.value)}
-                    value={report.suspectedCondition}
-                  />
-                  <TextField
-                    id="paramedic-notes"
-                    label="Paramedic Notes"
-                    onChange={(event) => updateReport("paramedicNotes", event.target.value)}
-                    rows={4}
-                    type="textarea"
-                    value={report.paramedicNotes}
-                  />
-                  <TextField
-                    helper='Optional JSON object, for example {"bp":"120/80","spo2":"98%"}'
-                    id="vitals"
-                    label="Vitals JSON"
-                    onChange={(event) => updateReport("vitalsCheck", event.target.value)}
-                    rows={4}
-                    type="textarea"
-                    value={report.vitalsCheck}
-                  />
+              <div className="grid grid-cols-3 gap-3 p-4 text-on-surface">
+                <div className="rounded-2xl bg-white/6 p-3 text-white">
+                  <div className="text-[11px] uppercase tracking-[0.24em] text-white/55">ETA</div>
+                  <div className="mt-2 text-lg font-semibold">{etaLabel}</div>
                 </div>
-                <Button className="mt-4 w-full px-6 py-2" icon="check_circle" iconSide="right" loading={isSubmitting} onClick={handlePrimaryAction}>
-                  Complete Handover
-                </Button>
+                <div className="rounded-2xl bg-white/6 p-3 text-white">
+                  <div className="text-[11px] uppercase tracking-[0.24em] text-white/55">Distance</div>
+                  <div className="mt-2 text-lg font-semibold">{distanceLabel}</div>
+                </div>
+                <div className="rounded-2xl bg-white/6 p-3 text-white">
+                  <div className="text-[11px] uppercase tracking-[0.24em] text-white/55">Phase</div>
+                  <div className="mt-2 text-sm font-semibold">
+                    {routePhase === "TO_PICKUP" ? "Route to Patient" : showCompletionForm ? "Handover" : "Route to Hospital"}
+                  </div>
+                </div>
               </div>
-            ) : (
-              <div className="mt-4 flex items-center justify-between border-t border-surface-variant pt-4">
-                <Button variant="soft" className="px-4 py-2" icon="call" onClick={syncDriverLocation}>
-                  Sync Location
-                </Button>
-                <Button className="px-6 py-2" icon="check_circle" iconSide="right" loading={isSubmitting} onClick={handlePrimaryAction}>
-                  {routePhase === "TO_PICKUP" ? "Arrived at Patient" : "Arrived at Hospital"}
-                </Button>
+            </Panel>
+
+            <Panel className="absolute bottom-4 left-4 right-4 z-10 p-4 md:bottom-auto md:left-6 md:right-auto md:top-32 md:w-80">
+              <div className="mb-2 flex items-start justify-between">
+                <div className="text-label-md uppercase text-secondary">Mission #{trip.id.slice(0, 8).toUpperCase()}</div>
+                <MaterialIcon name="fiber_manual_record" filled className="animate-soft-pulse text-[16px] text-primary" />
               </div>
-            )}
-          </Panel>
-        </MapStage>
+              <h3 className="text-headline-md">{trip.medicalReport?.suspectedCondition || "Emergency Response"}</h3>
+              <p className="mt-1 flex items-center gap-2 text-body-md text-secondary">
+                <MaterialIcon name="location_on" className="text-[18px]" />
+                {routePhase === "TO_PICKUP" ? trip.pickupAddress : trip.hospital?.address || trip.destAddress || "Hospital destination"}
+              </p>
+              <p className="mt-2 text-label-sm uppercase tracking-wider text-secondary">{formatStatusLabel(trip.status)}</p>
+              {locationError ? (
+                <p className="mt-3 rounded-2xl border border-error/20 bg-error/10 px-3 py-2 text-sm text-error">
+                  {locationError}
+                </p>
+              ) : null}
+              {showCompletionForm ? (
+                <div className="mt-4 border-t border-surface-variant pt-4">
+                  <div className="grid gap-stack-sm">
+                    <TextField
+                      id="severity"
+                      label="Severity"
+                      onChange={(event) => updateReport("severity", event.target.value)}
+                      value={report.severity}
+                    />
+                    <TextField
+                      id="suspected-condition"
+                      label="Suspected Condition"
+                      onChange={(event) => updateReport("suspectedCondition", event.target.value)}
+                      value={report.suspectedCondition}
+                    />
+                    <TextField
+                      id="paramedic-notes"
+                      label="Paramedic Notes"
+                      onChange={(event) => updateReport("paramedicNotes", event.target.value)}
+                      rows={4}
+                      type="textarea"
+                      value={report.paramedicNotes}
+                    />
+                    <TextField
+                      helper='Optional JSON object, for example {"bp":"120/80","spo2":"98%"}'
+                      id="vitals"
+                      label="Vitals JSON"
+                      onChange={(event) => updateReport("vitalsCheck", event.target.value)}
+                      rows={4}
+                      type="textarea"
+                      value={report.vitalsCheck}
+                    />
+                  </div>
+                  <Button className="mt-4 w-full px-6 py-2" icon="check_circle" iconSide="right" loading={isSubmitting} onClick={handlePrimaryAction}>
+                    Complete Handover
+                  </Button>
+                </div>
+              ) : (
+                <div className="mt-4 flex items-center justify-between gap-3 border-t border-surface-variant pt-4">
+                  <Button variant="soft" className="px-4 py-2" icon="my_location" onClick={syncDriverLocation}>
+                    Sync Location
+                  </Button>
+                  <Button className="px-6 py-2" icon="check_circle" iconSide="right" loading={isSubmitting} onClick={handlePrimaryAction}>
+                    {routePhase === "TO_PICKUP" ? "Arrived at Patient" : "Arrived at Hospital"}
+                  </Button>
+                </div>
+              )}
+            </Panel>
+          </div>
+        </GoogleMapsLoader>
       </div>
     </DashboardShell>
   );

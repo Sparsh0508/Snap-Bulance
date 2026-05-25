@@ -12,6 +12,8 @@ export const userApi = {
   updateProfile: (payload) => apiClient.put("/users/profile", payload),
   getActiveTrip: () => apiClient.get("/users/active-trip"),
   bookTrip: (payload) => apiClient.post("/users/book-trip", payload),
+  getNearbyAmbulances: (lat, lng, limit = 8) =>
+    apiClient.get(`/users/nearby-ambulances?lat=${lat}&lng=${lng}&limit=${limit}`),
   getTrip: (tripId) => apiClient.get(`/users/trip/${tripId}`),
   getTripChat: (tripId) => apiClient.get(`/users/trip/${tripId}/chat`),
   getTripHistory: () => apiClient.get("/users/trips/history"),

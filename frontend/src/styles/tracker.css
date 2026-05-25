@@ -1,0 +1,407 @@
+/**
+ * tracker.css
+ * Styles for real-time tracking components
+ */
+
+.enhanced-tracker-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.tracker-map {
+    width: 100%;
+    position: relative;
+    z-index: 1;
+}
+
+/* Tracking Info Panel */
+.tracking-info-panel {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    z-index: 10;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    max-width: 320px;
+    animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.info-card {
+    padding: 16px;
+}
+
+.info-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    border-bottom: 2px solid #f0f0f0;
+    padding-bottom: 12px;
+}
+
+.info-header h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: #333;
+}
+
+.status-badge {
+    padding: 4px 8px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.status-badge.status-searching {
+    background-color: #FFF3CD;
+    color: #856404;
+}
+
+.status-badge.status-assigned {
+    background-color: #D1ECF1;
+    color: #0C5460;
+}
+
+.status-badge.status-arrived {
+    background-color: #D4EDDA;
+    color: #155724;
+}
+
+.status-badge.status-on_board {
+    background-color: #E2E3E5;
+    color: #383D41;
+}
+
+.status-badge.status-completed {
+    background-color: #D4EDDA;
+    color: #155724;
+}
+
+/* Info Grid */
+.info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.info-item {
+    display: flex;
+    flex-direction: column;
+    padding: 8px;
+    background-color: #f9f9f9;
+    border-radius: 8px;
+    border-left: 3px solid #4285F4;
+}
+
+.info-item .label {
+    font-size: 11px;
+    color: #666;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+
+.info-item .value {
+    font-size: 14px;
+    font-weight: 700;
+    color: #333;
+}
+
+/* Map Controls */
+.map-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 16px;
+    background-color: #f5f5f5;
+    border-top: 1px solid #e0e0e0;
+}
+
+.control-btn {
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    background-color: white;
+    color: #333;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.control-btn:hover {
+    background-color: #f0f0f0;
+    border-color: #bbb;
+}
+
+.control-btn:active {
+    transform: scale(0.98);
+}
+
+.control-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Status Flow */
+.status-flow {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 24px 16px;
+    background: linear-gradient(to right, #f5f5f5, #ffffff);
+    border-radius: 8px;
+    margin-bottom: 20px;
+}
+
+.status-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    opacity: 0.4;
+    transition: all 0.3s ease;
+}
+
+.status-step.active {
+    opacity: 1;
+}
+
+.status-icon {
+    font-size: 32px;
+    margin-bottom: 8px;
+    transition: transform 0.3s ease;
+}
+
+.status-step.active .status-icon {
+    transform: scale(1.2);
+}
+
+.status-label {
+    font-size: 11px;
+    text-align: center;
+    color: #666;
+    font-weight: 600;
+    max-width: 80px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.status-step.active .status-label {
+    color: #333;
+}
+
+.status-connector {
+    flex: 1;
+    height: 2px;
+    background-color: #ddd;
+    margin: 0 8px;
+    transition: all 0.3s ease;
+}
+
+.status-connector.active {
+    background-color: #4285F4;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .tracking-info-panel {
+        max-width: calc(100% - 40px);
+        bottom: 10px;
+        left: 10px;
+        right: 10px;
+    }
+
+    .info-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .status-flow {
+        gap: 4px;
+    }
+
+    .status-label {
+        font-size: 9px;
+        max-width: 60px;
+    }
+
+    .status-icon {
+        font-size: 24px;
+    }
+}
+
+@media (max-width: 480px) {
+    .info-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+
+    .status-flow {
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .status-connector {
+        display: none;
+    }
+}
+
+/* Animation for live updates */
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.6;
+    }
+}
+
+.live-indicator {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background-color: #4CAF50;
+    border-radius: 50%;
+    margin-right: 6px;
+    animation: pulse 2s infinite;
+}
+
+/* Loading state */
+.tracker-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    background-color: rgba(255, 255, 255, 0.9);
+    border-radius: 12px;
+}
+
+.spinner {
+    width: 40px;
+    height: 40px;
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid #4285F4;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Distance and Time Display Cards */
+.distance-time-card {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 16px;
+    border-radius: 12px;
+    margin-bottom: 16px;
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.distance-time-card .metric {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.distance-time-card .metric:last-child {
+    margin-bottom: 0;
+}
+
+.distance-time-card .label {
+    font-size: 12px;
+    opacity: 0.9;
+}
+
+.distance-time-card .value {
+    font-size: 16px;
+    font-weight: 700;
+}
+
+/* Driver Info Card */
+.driver-info-card {
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 12px;
+    padding: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.driver-avatar {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background-color: #4285F4;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-weight: 700;
+    font-size: 20px;
+}
+
+.driver-details {
+    flex: 1;
+}
+
+.driver-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 4px;
+}
+
+.driver-vehicle {
+    font-size: 12px;
+    color: #666;
+}
+
+.driver-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.action-btn {
+    width: 36px;
+    height: 36px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    background-color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    transition: all 0.2s ease;
+}
+
+.action-btn:hover {
+    background-color: #f0f0f0;
+    border-color: #bbb;
+}
